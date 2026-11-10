@@ -14,20 +14,20 @@ The project has two independent tools:
 ## Repository structure
 
 ```
-Ciphertext-Corrupted-Analyzer/
+CiphertextCorrupted-Analyzer/
 ├── analyzer.py    # Statistical/heuristic analysis of one or more binary files
 ├── diff_find.py       # Byte-level diff between two hex-text files (raw vs. encrypted/corrupted)
 └── README.md
 ```
 
-No third-party cryptography library is used. `analyzer.py` relies only on the Python standard library (`matplotlib` is optional, only for `--histogram`). `diff_find.py` relies only on the standard library (`difflib` for sequence alignment when file sizes differ).
+No third-party cryptography library is used. `analyzer.py` relies only on the Python standard library (`matplotlib` is optional, only for `-H`/`--Histogram`). `diff_find.py` relies only on the standard library (`difflib` for sequence alignment when file sizes differ).
 
 ---
 
 ## Requirements
 
-- Python 3.9+ (uses `int.bit_count()` in `analyzer.py`, added in Python 3.10, and `from __future__ import annotations`).
-- Optional, only for `analyzer.py --histogram`:
+- Python 3.10+ (`analyzer.py` uses `int.bit_count()`, added in Python 3.10, and `from __future__ import annotations`).
+- Optional, only for `analyzer.py -H`/`--Histogram`:
 
 ```bash
 python -m pip install matplotlib
@@ -53,10 +53,10 @@ For each input file, the script computes a set of metrics and combines them into
 | Magic-number detection | Known file signatures (PNG, PDF, ZIP, gzip, ELF, etc.) found anywhere in the file |
 | 16-byte block repetition | Repeated blocks are a strong signal of a deterministic mode (e.g. ECB) |
 | Repeated 4-gram / 8-gram | Shorter repeated byte sequences, for finer-grained pattern detection |
-| Padding checks | PKCS#7, ANSI X.923, ISO/IEC 7816-4, and zero padding, flagged as unreliable unless `--plaintext` is set |
+| Padding checks | PKCS#7, ANSI X.923, ISO/IEC 7816-4, and zero padding, flagged as unreliable unless `--Plaintext` is set |
 | Block-size alignment | Whether the file size is a multiple of 8, 16, or 24 bytes (common block-cipher sizes) |
 
-When two or more files are analyzed with `--compare`, it additionally reports, for every pair:
+When two or more files are analyzed with `--Compare`, it additionally reports, for every pair:
 
 - Byte-by-byte differences and contiguous difference "runs".
 - XOR of the overlapping region (entropy, zero-byte ratio, longest run of identical bytes).
@@ -69,14 +69,14 @@ When two or more files are analyzed with `--compare`, it additionally reports, f
 Given a **raw (reference)** file and an **encrypted/suspect** file, both encoded as whitespace-separated hex bytes, the script compares them byte by byte and classifies every difference into one of these categories:
 
 - **Swaps** — exactly two positions where the bytes have traded places (`raw[i] == encrypted[j]` and `raw[j] == encrypted[i]`), detected via a union-find grouping of related differences.
-- **Permutation chains** — three or more positions whose values got cyclically shuffled among each other.
+- **Permutation chains** — three or more differing positions linked by shared values (a byte that left one position shows up at another), such as a cyclic shuffle.
 - **Modifications** — a byte changed to a value that isn't explained by a swap or chain with any other differing position.
-- **Moves / deletions / insertions** — only computed when the two files have **different lengths**, using `difflib.SequenceMatcher` to align the sequences and classify each "replace"/"delete"/"insert" opcode.
+- **Moves / deletions / insertions** — only computed when the two files have **different lengths**, using `difflib.SequenceMatcher` to align the sequences and classify each "replace"/"delete"/"insert" opcode (this path currently crashes; see [Known issues](#known-issues--limitations)).
 
 The script writes two output files next to the encrypted file:
 
-- `<name>_relatorio.txt` — a human-readable report listing every swap, chain, modification, move, deletion, and insertion found.
-- `<name>_corrigido.dat` — the reference (`raw`) byte sequence written back out in hex-text format, as a "known-good" copy to compare against or restore from.
+- `<name>_report.txt` — a human-readable report listing every swap, chain, modification, move, deletion, and insertion found.
+- `<name>_corrected.dat` — the reference (`raw`) byte sequence written back out in hex-text format, as a "known-good" copy to compare against or restore from.
 
 Any previous copies of these two files are deleted before a new run, so re-running the script always reflects the latest comparison.
 
@@ -109,11 +109,13 @@ python analyzer.py suspicious.bin -H
 | Flag | Description |
 |---|---|
 | `files` | One or more files to analyze (positional) |
-| `-C`, `--compare` | Compare every pair of input files |
-| `-V`, `--verbose` | Show byte-frequency table, ASCII strings, and n-grams |
-| `-P`, `--plaintext` | Treat input as plaintext when checking padding |
-| `-J`, `--json` | Output JSON instead of the text report |
-| `-H`, `--histogram` | Generate a byte-frequency histogram PNG (requires `matplotlib`) |
+| `-C`, `--Compare` | Compare every pair of input files |
+| `-V`, `--Verbose` | Show byte-frequency table, ASCII strings, and n-grams |
+| `-P`, `--Plaintext` | Treat input as plaintext when checking padding |
+| `-J`, `--Json` | Output JSON instead of the text report |
+| `-H`, `--Histogram` | Generate a byte-frequency histogram PNG, saved as `<file>_byte_histogram.png` next to each input (requires `matplotlib`) |
+
+> The long options are capitalized in the code, and `argparse` is case-sensitive: `--compare` is rejected, `--Compare` works.
 
 ### `diff_find.py`
 
@@ -129,28 +131,30 @@ Run:
 python diff_find.py raw.dat encrypted.dat
 ```
 
-> The script's own `--help`-style usage message refers to it as `comparar.py` — this is left over from an earlier filename; the actual entry point in this repository is `diff_find.py`, and that's what should be used on the command line.
+> The usage message the script prints when called with the wrong number of arguments refers to it as `comparar.py` — this is left over from an earlier filename; the actual entry point in this repository is `diff_find.py`, and that's what should be used on the command line.
 
 Output:
 
 - A console summary (file sizes, first bytes, raw difference list, and totals per category).
-- `encrypted_relatorio.txt` — the detailed report (or `encrypted<...>_relatorio.txt` for whatever the encrypted file's base name is).
-- `encrypted_corrigido.dat` — the raw sequence re-written in hex-text format.
+- `encrypted_report.txt` — the detailed report (in general, `<name>_report.txt`, where `<name>` is the encrypted file's path without its extension).
+- `encrypted_corrected.dat` — the raw sequence re-written in hex-text format.
 
 ---
 
 ## Implementation notes
 
 - **`analyzer.py` classification is heuristic only.** High entropy plus a low index of coincidence is consistent with encryption or compression, but the script cannot and does not claim to identify a specific cipher or mode. Every classification result includes a `warnings` list and `definitive_algorithm_identification: false`.
-- **Padding checks on ciphertext are inherently unreliable.** A coincidental byte pattern can look like valid PKCS#7/X.923/ISO 7816-4/zero padding by chance; `analyzer.py` labels these checks `not_reliable_on_ciphertext` unless `--plaintext` is passed.
+- **Padding checks on ciphertext are inherently unreliable.** A coincidental byte pattern can look like valid PKCS#7/X.923/ISO 7816-4/zero padding by chance; `analyzer.py` labels these checks `not_reliable_on_ciphertext` unless `--Plaintext` is passed.
 - **`diff_find.py`'s swap/chain detection is O(n²)** over the number of differing bytes (it compares every pair of differences to build the union-find groups), so it can become slow on files with a very large number of differing positions.
-- **The `_corrigido.dat` file is not a repair of the encrypted file** — it is simply the `raw` reference re-serialized to hex text. It's meant as a convenient "known-good" copy alongside the report, not an automatic fix derived from the diff.
+- **The `_corrected.dat` file is not a repair of the encrypted file** — it is simply the `raw` reference re-serialized to hex text. It's meant as a convenient "known-good" copy alongside the report, not an automatic fix derived from the diff.
 
 ## Known issues / limitations
 
 This project is **experimental**; treat both scripts as diagnostic aids, not authoritative answers:
 
-- **`diff_find.py` crashes on same-length files with differing bytes.** `comparison()` builds each difference record with the keys `"indice"` and `"posicao"`, but `changes()`, and the swap/chain branches inside `detc_groups()`, read them back as `"index"` and `"position"` — a `KeyError` on the first run that finds any differing byte. Until this is fixed, same-length comparisons (the script's main path) will not complete.
+- **`diff_find.py` crashes on files of different lengths.** In `main()`, the different-length branch never defines `chains`, so the call to `report()` raises `UnboundLocalError` (after the previous output files have already been deleted). Until this is fixed, moves, deletions, and insertions are never reported.
+- **`diff_find.py` also crashes on a two-position group that isn't a clean swap** (for example, `raw[j] == encrypted[i]` but `raw[i] != encrypted[j]`): in `detc_groups()`, `i, j = i` overwrites the group list, and the following `for i in i` raises `TypeError`. Clean swaps, chains of three or more positions, and isolated modifications work.
+- **`analyzer.py -H` fails on input files without an extension**: `Path.with_suffix()` rejects the `_byte_histogram.png` suffix and raises `ValueError`.
 - **`analyzer.py` cannot identify a specific algorithm.** High entropy is compatible with many ciphers, compressed formats, and random data alike; use the candidates list as a starting point for further investigation, not a conclusion.
 - **Short files limit every statistical test.** With fewer than ~256 bytes, entropy and chi-square lose most of their discriminating power; `analyzer.py` surfaces this with explicit warnings, but the caller still has to account for it.
 - **`diff_find.py`'s move/insertion/deletion detection (`difflib`-based) is a heuristic alignment**, not a guaranteed reconstruction of what actually happened to the data — `SequenceMatcher` finds *a* plausible alignment, not necessarily *the* one that occurred.
